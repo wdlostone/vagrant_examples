@@ -16,10 +16,6 @@ Vagrant.configure("2") do |config|
     master.vm.network "public_network", bridge: "eno1"
     master.vm.network "private_network", ip: "10.0.0.10"
     # to allow the ip address from above it needs to be added. Check here for details: https://www.virtualbox.org/manual/ch06.html#network_hostonly
-#    master.vm.network "forwarded_port", guest: 15030, host: 15030
-#    master.vm.network "forwarded_port", guest: 15031, host: 15031
-#     master.vm.network "forwarded_port", guest: 9090, host: 15039
-#     master.vm.network "forwarded_port", guest: 3000, host: 15031
     master.vm.provision :shell, privileged: false, inline: $provision_master_node
   end
 
@@ -141,42 +137,5 @@ sudo systemctl restart kubelet
 # wget https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 # sed -i 's/10.244/192.168/g' kube-flannel.yml
 # kubectl apply -f kube-flannel.yml
-
-# Install metallb
-# kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/namespace.yaml
-# kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/metallb.yaml
-# kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
-
-# Install the metallb configmap so the correct IP addresses are used
-# kubectl apply -f - <<EOF
-# apiVersion: v1
-# kind: ConfigMap
-# metadata:
-#   namespace: metallb-system
-#   name: config
-# data:
-#   config: |
-#     address-pools:
-#     - name: default
-#       protocol: layer2
-#       addresses:
-#       - 10.0.0.20-10.0.0.30
-# EOF
-
-# Installing Istio
-#curl -L https://istio.io/downloadIstio | sh -
-#export PATH="$PATH:/home/vagrant/test/istio-1.5.2/bin"
-#istioctl manifest apply --set profile=demo --set addonComponents.kiali.enabled=false --set values.gateways.istio-ingressgateway.sds.enabled=true
-# wget istio-1.5.4-linux.tar.gz  https://github.com/istio/istio/releases/download/1.5.4/istio-1.5.4-linux.tar.gz
-# tar -xf istio-1.5.4-linux.tar.gz
-# export PATH="$PATH:/home/vagrant/istio-1.5.4/bin"
-# istioctl manifest apply --set profile=demo
-# istioctl manifest apply --set values.gateways.istio-egressgateway.enabled=true --set values.global.sds.enabled=true --set values.grafana.enabled=true --set values.grafana.security.enabled=true
-
-# Instruct Istio to automatically inject Envoy sidecar proxies when you deploy your application later
-# kubectl label namespace default istio-injection=enabled
-
-# Install Kubernetes cert-manager
-# kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v0.15.0/cert-manager.yaml
 
 SHELL
