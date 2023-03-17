@@ -13,3 +13,16 @@ ssh into the master and then run the commands
 kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
 kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml
 ```
+
+## Monitoring
+The Prometheus Helm chart is located here: https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
+Below is how to install Prometheus with Helm:
+```
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+```
+The Helm chart will install:
+- alertmanager
+- kube-state-metrics
+- prometheus-node-exporter
+- prometheus-pushgateway
