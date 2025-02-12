@@ -1,0 +1,15 @@
+# ignore ALL .log files
+*.log
+
+# ignore ALL join file
+join.sh
+
+# -*- mode: gitignore; -*-
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*

@@ -7,14 +7,23 @@ VirtualBox only allows Ip addresses in the 192.168.56.0/21 range to be assigned 
 * 2001::/64
 ```
 
-By default it is not using a CNI, so that needs to be done. To use Calico,
-ssh into the master and then run the commands
+## CNI
+---
+By default the Vagrantfile is using Calico as the CNI. Quickstart Calico documentation is located [here](https://docs.tigera.io/calico/latest/getting-started/kubernetes/quickstart)
+[Here](https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises) is documentation for onprem. This is used if you want to make networking modifications
+To use Calico, ssh into the master and then run the commands
 ```
-kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
-kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/tigera-operator.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/custom-resources.yaml
 ```
 
+## Helm
+---
+Helm installation is located [here](https://helm.sh/docs/intro/install/). It's essentially downloading the binary and putting it in the `/usr/local/bin/` directory.
+Specific versions of Helm can be found [here](https://github.com/helm/helm/releases)
+
 ## Monitoring
+---
 The Prometheus Helm chart is located here: https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
 Below is how to install Prometheus with Helm:
 ```
