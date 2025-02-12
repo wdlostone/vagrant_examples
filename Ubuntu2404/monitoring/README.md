@@ -1,4 +1,4 @@
-##Monitoring
+## Monitoring
 ---
 
 ## Helm
@@ -7,9 +7,9 @@ Helm installation is located [here](https://helm.sh/docs/intro/install/). It's e
 Specific versions of Helm can be found [here](https://github.com/helm/helm/releases)
 Helm will be used to install Prometheus
 
-##Metrics Server
+## Metrics Server
 ---
-Install instructions are located here https://resources.realtheory.io/docs/how-to-install-or-upgrade-the-metrics-server
+Install instructions are located [here](https://resources.realtheory.io/docs/how-to-install-or-upgrade-the-metrics-server)
 
 To download the latest version
 ```
