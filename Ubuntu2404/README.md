@@ -120,3 +120,55 @@ To get the full analysis of the system
 k8sgpt analyze --explain
 ```
 
+## Using Kubescape
+This is also used for doing vulnerability in the cluster
+
+Documentation is located [here](https://kubescape.io/docs/install-cli/#ubuntu)
+
+### Installing Kubescape
+```
+sudo add-apt-repository ppa:kubescape/kubescape
+sudo apt update
+sudo apt install kubescape
+```
+
+### ARGOCD
+
+Installing (Directions located here: https://argo-cd.readthedocs.io/en/stable/getting_started/)
+```
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+
+Allowing external access
+```
+kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"NodePort"}}'
+```
+
+Getting the IP address and port number
+```
+ip addr show
+3: enp0s8: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    link/ether 08:00:27:29:d8:4c brd ff:ff:ff:ff:ff:ff
+    inet 192.168.254.162/24 metric 100 brd 192.168.254.255 scope global dynamic enp0s8
+```
+The IP address would be 192.168.254.162
+
+Getting the portnumber
+```
+kubectl -n argocd get svc argocd-server
+NAME            TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+argocd-server   NodePort   10.103.31.196   <none>        80:31373/TCP,443:30455/TCP   66m
+```
+In the case above, the port is 31373
+
+Logging in
+
+Admin user is: admin
+Getting the password:
+```
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+```
+
+The URL is https://192.168.254.162:31373/
