@@ -8,7 +8,7 @@ Vagrant files for local Kubernetes clusters.
 | [`Ubuntu2404`](Ubuntu2404) | Older Linux/VirtualBox version (Kubernetes 1.32) |
 | [`Ubuntu2204`](Ubuntu2204) | Older Linux/VirtualBox version (Kubernetes 1.26). No longer provisions: it installs from the legacy `apt.kubernetes.io` repository, which has been shut down |
 
-Each directory's provisioning scripts are in its `scripts/` folder (`common.sh` runs on every node, `master.sh` on the master, `worker.sh` on the workers) and are loaded by the Vagrantfile with `config.vm.provision :shell, path: ...`.
+Each directory's provisioning scripts are in its `scripts/` folder (`common.sh` runs on every node, `control-plane.sh` on the control plane, `worker.sh` on the workers) and are loaded by the Vagrantfile with `config.vm.provision :shell, path: ...`. The older `Ubuntu2204` and `Ubuntu2404` directories still use the older name `master` (`master.sh`, `vagrant ssh master`).
 
 ## Checks
 ---
