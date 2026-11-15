@@ -1,0 +1,250 @@
+# Kubernetes cluster (1 master + N workers) on Ubuntu 24.04 guests.
+#
+# Works on Linux and macOS hosts, on amd64 (Intel/AMD) and arm64 (Apple Silicon),
+# with either:
+#   - VirtualBox 7.1+            vagrant up --provider virtualbox
+#   - VMware Workstation/Fusion  vagrant up --provider vmware_desktop
+#                                (requires the vagrant-vmware-desktop plugin
+#                                 and the Vagrant VMware Utility)
+#
+# Everything below can be tuned with environment variables, e.g.
+#   WORKER_COUNT=1 NODE_MEMORY=3072 vagrant up
+#   BRIDGE_IFACE=eno1 vagrant up          # Linux host, bridge the master to the LAN
+# See README.md in this directory for details.
+
+BOX            = ENV.fetch("K8S_BOX", "bento/ubuntu-24.04")
+BOX_VERSION    = ENV["K8S_BOX_VERSION"]                # nil = latest
+WORKER_COUNT   = ENV.fetch("WORKER_COUNT", "2").to_i
+NODE_MEMORY    = ENV.fetch("NODE_MEMORY", "4096").to_i
+NODE_CPUS      = ENV.fetch("NODE_CPUS", "2").to_i
+NETWORK_PREFIX = ENV.fetch("NETWORK_PREFIX", "10.0.0")  # master = .10, workers = .11, .12, ...
+BRIDGE_IFACE   = ENV["BRIDGE_IFACE"]                    # e.g. "eno1" (Linux) or "en0: Wi-Fi" (macOS)
+K8S_VERSION    = ENV.fetch("K8S_VERSION", "1.37")       # pkgs.k8s.io minor version
+CALICO_VERSION = ENV.fetch("CALICO_VERSION", "v3.33.0") # tested with Kubernetes 1.35-1.37
+POD_CIDR       = ENV.fetch("POD_CIDR", "192.168.0.0/16")
+INSTALL_DOCKER = ENV.fetch("INSTALL_DOCKER", "true")
+
+MASTER_IP = "#{NETWORK_PREFIX}.10"
+JOIN_FILE = File.join(__dir__, "join.sh")
+
+Vagrant.configure("2") do |config|
+  config.vm.box = BOX
+  config.vm.box_version = BOX_VERSION if BOX_VERSION
+
+  config.vm.provider :virtualbox do |v|
+    v.memory = NODE_MEMORY
+    v.cpus = NODE_CPUS
+  end
+
+  config.vm.provider :vmware_desktop do |v|
+    v.gui = false
+    v.vmx["memsize"] = NODE_MEMORY.to_s
+    v.vmx["numvcpus"] = NODE_CPUS.to_s
+  end
+
+  # Common tooling on every node (container runtime + kubeadm/kubelet/kubectl)
+  config.vm.provision :shell, privileged: true, inline: $install_common_tools,
+    env: {
+      "K8S_VERSION"    => K8S_VERSION,
+      "INSTALL_DOCKER" => INSTALL_DOCKER,
+    }
+
+  config.vm.define :master, primary: true do |master|
+    master.vm.hostname = "master"
+    master.vm.network "private_network", ip: MASTER_IP
+    master.vm.network "public_network", bridge: BRIDGE_IFACE if BRIDGE_IFACE
+    master.vm.network "forwarded_port", guest: 8080, host: 8080
+
+    master.vm.provision :shell, privileged: false, inline: $provision_master_node,
+      env: {
+        "MASTER_IP"      => MASTER_IP,
+        "POD_CIDR"       => POD_CIDR,
+        "NODE_CIDR"      => "#{NETWORK_PREFIX}.0/24",
+        "CALICO_VERSION" => CALICO_VERSION,
+      }
+
+    # join.sh is only valid for the cluster that created it
+    master.trigger.after :destroy do |t|
+      t.info = "Removing stale join.sh"
+      t.ruby { |_env, _machine| File.delete(JOIN_FILE) if File.exist?(JOIN_FILE) }
+    end
+  end
+
+  (1..WORKER_COUNT).each do |i|
+    config.vm.define "worker#{i}" do |worker|
+      worker.vm.hostname = "worker#{i}"
+      worker.vm.network "private_network", ip: "#{NETWORK_PREFIX}.#{10 + i}"
+
+      worker.vm.provision :shell, privileged: true, inline: $provision_worker_node,
+        env: { "NODE_IP" => "#{NETWORK_PREFIX}.#{10 + i}" }
+    end
+  end
+end
+
+# Installed on the master and all workers
+$install_common_tools = <<-'SCRIPT'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+ARCH="$(dpkg --print-architecture)"   # amd64 or arm64
+echo "Provisioning for architecture: ${ARCH}"
+
+# Disable swap
+swapoff -a
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+# Kernel modules and sysctl settings required by Kubernetes (persist across reboots)
+cat <<EOF > /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+modprobe overlay
+modprobe br_netfilter
+
+cat <<EOF > /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sysctl --system
+
+apt-get update
+apt-get install -y ca-certificates curl gnupg apt-transport-https
+
+# Docker's apt repo (provides containerd.io, and Docker itself if wanted)
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" \
+  > /etc/apt/sources.list.d/docker.list
+
+# Kubernetes apt repo (key and repo use the same version)
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/Release.key" \
+  | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${K8S_VERSION}/deb/ /" \
+  > /etc/apt/sources.list.d/kubernetes.list
+
+apt-get update
+
+# containerd (from Docker's repo, so it doesn't conflict with docker-ce)
+apt-get install -y containerd.io
+if [ "${INSTALL_DOCKER}" = "true" ]; then
+  apt-get install -y docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin
+  usermod -aG docker vagrant   # takes effect on the next `vagrant ssh`
+fi
+
+# Configure containerd for Kubernetes: enable CRI and use the systemd cgroup driver
+mkdir -p /etc/containerd
+containerd config default > /etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+if ! grep -q 'SystemdCgroup = true' /etc/containerd/config.toml; then
+  echo "ERROR: could not enable SystemdCgroup in /etc/containerd/config.toml" >&2
+  exit 1
+fi
+systemctl restart containerd
+systemctl enable containerd
+
+# Kubernetes tooling
+apt-get install -y kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl
+SCRIPT
+
+$provision_master_node = <<-'SHELL'
+set -euo pipefail
+JOIN_FILE=/vagrant/join.sh
+rm -f "${JOIN_FILE}"
+
+# Pin the kubelet to the private network address (not the NAT interface)
+echo "KUBELET_EXTRA_ARGS=--node-ip=${MASTER_IP}" | sudo tee /etc/default/kubelet
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+
+# Start the cluster
+sudo kubeadm init \
+  --apiserver-advertise-address="${MASTER_IP}" \
+  --pod-network-cidr="${POD_CIDR}" \
+  --node-name master
+
+# Configure kubectl for the vagrant user
+mkdir -p "$HOME/.kube"
+sudo cp -f /etc/kubernetes/admin.conf "$HOME/.kube/config"
+sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+
+# Install Calico. Node address autodetection is pinned to the private network
+# so Calico doesn't pick the hypervisor's NAT interface (same IP on every node).
+# Calico 3.30+ ships the operator CRDs in a separate manifest.
+CALICO_MANIFESTS="https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests"
+if curl -fsI "${CALICO_MANIFESTS}/operator-crds.yaml" >/dev/null; then
+  kubectl create -f "${CALICO_MANIFESTS}/operator-crds.yaml"
+fi
+kubectl create -f "${CALICO_MANIFESTS}/tigera-operator.yaml"
+kubectl wait --for=condition=Established --timeout=120s crd/installations.operator.tigera.io crd/apiservers.operator.tigera.io
+kubectl create -f - <<EOF
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+    - name: default-ipv4-ippool
+      blockSize: 26
+      cidr: ${POD_CIDR}
+      encapsulation: VXLANCrossSubnet
+      natOutgoing: Enabled
+      nodeSelector: all()
+    nodeAddressAutodetectionV4:
+      cidrs:
+      - ${NODE_CIDR}
+---
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata:
+  name: default
+spec: {}
+EOF
+
+# Calico 3.30+ observability components (flow aggregator + Whisker UI),
+# matching upstream's default custom-resources.yaml
+if kubectl get crd goldmanes.operator.tigera.io whiskers.operator.tigera.io >/dev/null 2>&1; then
+  kubectl create -f - <<EOF
+apiVersion: operator.tigera.io/v1
+kind: Goldmane
+metadata:
+  name: default
+---
+apiVersion: operator.tigera.io/v1
+kind: Whisker
+metadata:
+  name: default
+EOF
+fi
+
+# Write the join command last, so workers only see it once the master is ready
+sudo kubeadm token create --print-join-command > "${JOIN_FILE}.tmp"
+chmod +x "${JOIN_FILE}.tmp"
+mv "${JOIN_FILE}.tmp" "${JOIN_FILE}"
+echo "Join command written to ${JOIN_FILE}"
+SHELL
+
+$provision_worker_node = <<-'SHELL'
+set -euo pipefail
+JOIN_FILE=/vagrant/join.sh
+
+# Wait for the master to publish the join command (covers parallel `vagrant up`)
+for _ in $(seq 1 90); do
+  [ -x "${JOIN_FILE}" ] && break
+  echo "Waiting for ${JOIN_FILE} from the master..."
+  sleep 10
+done
+if [ ! -x "${JOIN_FILE}" ]; then
+  echo "ERROR: ${JOIN_FILE} not found. Bring up the master first: vagrant up master" >&2
+  exit 1
+fi
+
+echo "KUBELET_EXTRA_ARGS=--node-ip=${NODE_IP}" > /etc/default/kubelet
+systemctl daemon-reload
+systemctl restart kubelet
+
+bash "${JOIN_FILE}"
+SHELL
