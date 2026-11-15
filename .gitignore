@@ -13,3 +13,5 @@ join.sh
 auto-save-list
 tramp
 .\#*
+# ignore Vagrant machine state
+.vagrant/
