@@ -10,6 +10,8 @@ It replaces the separate Linux ([`../Ubuntu2404`](../Ubuntu2404)) and macOS vers
 | worker1 | 10.0.0.11  |
 | worker2 | 10.0.0.12  |
 
+The provisioning scripts are in [`scripts/`](scripts): `common.sh` runs on every node, `master.sh` on the master, and `worker.sh` on the workers. The Vagrantfile passes the settings below to them as environment variables.
+
 ### What's installed
 - `containerd.io` from Docker's apt repo, using the systemd cgroup driver
 - `kubeadm`, `kubelet` and `kubectl` from pkgs.k8s.io (held at the installed version)
