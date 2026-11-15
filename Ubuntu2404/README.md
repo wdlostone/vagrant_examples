@@ -43,7 +43,9 @@ source <(k8sgpt completion bash)
 ### On the machine that has Ollama running
 You will need to update the service for the Ollama service
 ```
-sudo systemctl edit ollama.service. You will need to add the [Service] line and the line below it. Below is what it should look like
+sudo systemctl edit ollama.service
+```
+You will need to add the [Service] line and the line below it. Below is what it should look like
 ```
 ### Anything between here and the comment below will become the new contents of the file
 
