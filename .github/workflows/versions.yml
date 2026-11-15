@@ -5,6 +5,7 @@ on:
     paths:
       - "**/Vagrantfile"
       - "**/scripts/**"
+      - "**/addons/**"
       - "**/monitoring/**"
       - "renovate.json"
       - ".github/scripts/check-versions.sh"
@@ -30,8 +31,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check Kubernetes, Calico and image versions
+      - name: Check Kubernetes, Calico, image and add-on versions
         run: .github/scripts/check-versions.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   renovate-config:
     name: Renovate config

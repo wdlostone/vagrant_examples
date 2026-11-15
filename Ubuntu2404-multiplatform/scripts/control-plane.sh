@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs on the master as the vagrant user: kubeadm init, kubectl config, Calico, join.sh.
+# Runs on the control plane as the vagrant user: kubeadm init, kubectl config, Calico, join.sh.
 # Environment variables are passed in from the Vagrantfile.
 set -euo pipefail
-: "${MASTER_IP:?MASTER_IP must be set by the Vagrantfile}"
+: "${CONTROL_PLANE_IP:?CONTROL_PLANE_IP must be set by the Vagrantfile}"
 : "${POD_CIDR:?POD_CIDR must be set by the Vagrantfile}"
 : "${NODE_CIDR:?NODE_CIDR must be set by the Vagrantfile}"
 : "${CALICO_VERSION:?CALICO_VERSION must be set by the Vagrantfile}"
@@ -10,15 +10,15 @@ JOIN_FILE=/vagrant/join.sh
 rm -f "${JOIN_FILE}"
 
 # Pin the kubelet to the private network address (not the NAT interface)
-echo "KUBELET_EXTRA_ARGS=--node-ip=${MASTER_IP}" | sudo tee /etc/default/kubelet
+echo "KUBELET_EXTRA_ARGS=--node-ip=${CONTROL_PLANE_IP}" | sudo tee /etc/default/kubelet
 sudo systemctl daemon-reload
 sudo systemctl restart kubelet
 
 # Start the cluster
 sudo kubeadm init \
-  --apiserver-advertise-address="${MASTER_IP}" \
+  --apiserver-advertise-address="${CONTROL_PLANE_IP}" \
   --pod-network-cidr="${POD_CIDR}" \
-  --node-name master
+  --node-name control-plane
 
 # Configure kubectl for the vagrant user
 mkdir -p "$HOME/.kube"
@@ -75,7 +75,7 @@ metadata:
 EOF
 fi
 
-# Write the join command last, so workers only see it once the master is ready
+# Write the join command last, so workers only see it once the control plane is ready
 sudo kubeadm token create --print-join-command | tee "${JOIN_FILE}.tmp" > /dev/null
 chmod +x "${JOIN_FILE}.tmp"
 mv "${JOIN_FILE}.tmp" "${JOIN_FILE}"

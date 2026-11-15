@@ -1,4 +1,4 @@
-# Kubernetes cluster (1 master + N workers) on Ubuntu 24.04 guests.
+# Kubernetes cluster (1 control plane + N workers) on Ubuntu 24.04 guests.
 #
 # Works on Linux and macOS hosts, on amd64 (Intel/AMD) and arm64 (Apple Silicon),
 # with either:
@@ -9,7 +9,7 @@
 #
 # Everything below can be tuned with environment variables, e.g.
 #   WORKER_COUNT=1 NODE_MEMORY=3072 vagrant up
-#   BRIDGE_IFACE=eno1 vagrant up          # Linux host, bridge the master to the LAN
+#   BRIDGE_IFACE=eno1 vagrant up          # Linux host, bridge the control plane to the LAN
 # See README.md in this directory for details.
 
 BOX            = ENV.fetch("K8S_BOX", "bento/ubuntu-24.04")
@@ -17,15 +17,26 @@ BOX_VERSION    = ENV["K8S_BOX_VERSION"]                # nil = latest
 WORKER_COUNT   = ENV.fetch("WORKER_COUNT", "2").to_i
 NODE_MEMORY    = ENV.fetch("NODE_MEMORY", "4096").to_i
 NODE_CPUS      = ENV.fetch("NODE_CPUS", "2").to_i
-NETWORK_PREFIX = ENV.fetch("NETWORK_PREFIX", "10.0.0")  # master = .10, workers = .11, .12, ...
+NETWORK_PREFIX = ENV.fetch("NETWORK_PREFIX", "10.0.0")  # control plane = .10, workers = .11, .12, ...
 BRIDGE_IFACE   = ENV["BRIDGE_IFACE"]                    # e.g. "eno1" (Linux) or "en0: Wi-Fi" (macOS)
 K8S_VERSION    = ENV.fetch("K8S_VERSION", "1.37")       # pkgs.k8s.io minor version
 CALICO_VERSION = ENV.fetch("CALICO_VERSION", "v3.33.0") # tested with Kubernetes 1.35-1.37
 POD_CIDR       = ENV.fetch("POD_CIDR", "192.168.0.0/16")
 INSTALL_DOCKER = ENV.fetch("INSTALL_DOCKER", "true")
+INSTALL_ARGOCD = ENV.fetch("INSTALL_ARGOCD", "false") == "true" # run addons/install-argocd.sh after `vagrant up`
+INSTALL_KARGO  = ENV.fetch("INSTALL_KARGO", "false") == "true"  # run addons/install-kargo.sh (also installs Argo CD)
 
-MASTER_IP = "#{NETWORK_PREFIX}.10"
+CONTROL_PLANE_IP = "#{NETWORK_PREFIX}.10"
 JOIN_FILE = File.join(__dir__, "join.sh")
+
+# Optional add-ons, installed on the control plane once the last worker is up
+# (their pods can't run on the tainted control plane, so they need a worker)
+ADDONS = []
+ADDONS << "install-argocd.sh" if INSTALL_ARGOCD
+ADDONS << "install-kargo.sh" if INSTALL_KARGO
+if !ADDONS.empty? && WORKER_COUNT < 1
+  abort "INSTALL_ARGOCD/INSTALL_KARGO need at least one worker (WORKER_COUNT >= 1)"
+end
 
 Vagrant.configure("2") do |config|
   config.vm.box = BOX
@@ -49,22 +60,22 @@ Vagrant.configure("2") do |config|
       "INSTALL_DOCKER" => INSTALL_DOCKER,
     }
 
-  config.vm.define :master, primary: true do |master|
-    master.vm.hostname = "master"
-    master.vm.network "private_network", ip: MASTER_IP
-    master.vm.network "public_network", bridge: BRIDGE_IFACE if BRIDGE_IFACE
-    master.vm.network "forwarded_port", guest: 8080, host: 8080
+  config.vm.define "control-plane", primary: true do |cp|
+    cp.vm.hostname = "control-plane"
+    cp.vm.network "private_network", ip: CONTROL_PLANE_IP
+    cp.vm.network "public_network", bridge: BRIDGE_IFACE if BRIDGE_IFACE
+    cp.vm.network "forwarded_port", guest: 8080, host: 8080
 
-    master.vm.provision :shell, privileged: false, path: "scripts/master.sh",
+    cp.vm.provision :shell, privileged: false, path: "scripts/control-plane.sh",
       env: {
-        "MASTER_IP"      => MASTER_IP,
-        "POD_CIDR"       => POD_CIDR,
-        "NODE_CIDR"      => "#{NETWORK_PREFIX}.0/24",
-        "CALICO_VERSION" => CALICO_VERSION,
+        "CONTROL_PLANE_IP" => CONTROL_PLANE_IP,
+        "POD_CIDR"         => POD_CIDR,
+        "NODE_CIDR"        => "#{NETWORK_PREFIX}.0/24",
+        "CALICO_VERSION"   => CALICO_VERSION,
       }
 
     # join.sh is only valid for the cluster that created it
-    master.trigger.after :destroy do |t|
+    cp.trigger.after :destroy do |t|
       t.info = "Removing stale join.sh"
       t.ruby { |_env, _machine| File.delete(JOIN_FILE) if File.exist?(JOIN_FILE) }
     end
@@ -77,6 +88,17 @@ Vagrant.configure("2") do |config|
 
       worker.vm.provision :shell, privileged: true, path: "scripts/worker.sh",
         env: { "NODE_IP" => "#{NETWORK_PREFIX}.#{10 + i}" }
+
+      # Runs on the host after the last worker is up (on every `vagrant up`;
+      # the scripts are safe to re-run)
+      if i == WORKER_COUNT
+        ADDONS.each do |script|
+          worker.trigger.after :up do |t|
+            t.info = "Running addons/#{script} on the control plane"
+            t.run = { inline: "vagrant ssh control-plane -c /vagrant/addons/#{script}" }
+          end
+        end
+      end
     end
   end
 end

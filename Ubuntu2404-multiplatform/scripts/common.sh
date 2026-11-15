@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installed on the master and all workers: container runtime + kubeadm/kubelet/kubectl.
+# Installed on the control plane and all workers: container runtime + kubeadm/kubelet/kubectl.
 # Environment variables are passed in from the Vagrantfile.
 set -euo pipefail
 : "${K8S_VERSION:?K8S_VERSION must be set by the Vagrantfile}"

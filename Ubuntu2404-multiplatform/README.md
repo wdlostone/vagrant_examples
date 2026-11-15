@@ -1,22 +1,23 @@
 ## Kubernetes cluster on Ubuntu 24.04 (Linux and macOS hosts)
 
-This Vagrantfile brings up a local Kubernetes cluster with one master and two workers (by default). It runs on **Linux and macOS** hosts, on **amd64 (Intel/AMD)** and **arm64 (Apple Silicon)**, with **VirtualBox** or **VMware**.
+This Vagrantfile brings up a local Kubernetes cluster with one control plane node and two workers (by default). It runs on **Linux and macOS** hosts, on **amd64 (Intel/AMD)** and **arm64 (Apple Silicon)**, with **VirtualBox** or **VMware**.
 
 It replaces the separate Linux ([`../Ubuntu2404`](../Ubuntu2404)) and macOS versions with one file.
 
-| Node    | IP         |
-|---------|------------|
-| master  | 10.0.0.10  |
-| worker1 | 10.0.0.11  |
-| worker2 | 10.0.0.12  |
+| Node          | IP         |
+|---------------|------------|
+| control-plane | 10.0.0.10  |
+| worker1       | 10.0.0.11  |
+| worker2       | 10.0.0.12  |
 
-The provisioning scripts are in [`scripts/`](scripts): `common.sh` runs on every node, `master.sh` on the master, and `worker.sh` on the workers. The Vagrantfile passes the settings below to them as environment variables.
+The provisioning scripts are in [`scripts/`](scripts): `common.sh` runs on every node, `control-plane.sh` on the control plane, and `worker.sh` on the workers. The Vagrantfile passes the settings below to them as environment variables.
 
 ### What's installed
 - `containerd.io` from Docker's apt repo, using the systemd cgroup driver
 - `kubeadm`, `kubelet` and `kubectl` from pkgs.k8s.io (held at the installed version)
 - [Calico](https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises) as the CNI, pinned to the private network so it doesn't use the hypervisor's NAT interface
 - Docker for development (optional, see `INSTALL_DOCKER`). See the [Docker install docs](https://docs.docker.com/engine/install/ubuntu/) and [post-install docs](https://docs.docker.com/engine/install/linux-postinstall/)
+- Optional add-ons: [Argo CD](#argocd) and [Kargo](#kargo), with install scripts in [`addons/`](addons) (see `INSTALL_ARGOCD` and `INSTALL_KARGO`)
 
 ### Changes from the old `Ubuntu2404` Vagrantfile
 - **Architecture-aware.** Detects `arm64`/`amd64` instead of hardcoding amd64.
@@ -27,7 +28,8 @@ The provisioning scripts are in [`scripts/`](scripts): `common.sh` runs on every
 - **Settings survive a reboot.** Kernel modules are written to `/etc/modules-load.d/`.
 - **The kubelet node IP is set before `kubeadm init`.**
 - **Fails fast.** Scripts run with `set -euo pipefail`.
-- **Safer worker joins.** Workers wait for the master's `join.sh`, so parallel `vagrant up` is safe. `join.sh` is deleted when the master is destroyed.
+- **Safer worker joins.** Workers wait for the control plane's `join.sh`, so parallel `vagrant up` is safe. `join.sh` is deleted when the control plane is destroyed.
+- **Current Kubernetes naming.** The control plane node is called `control-plane` instead of `master`, matching the term Kubernetes now uses.
 
 ## Prerequisites
 ---
@@ -72,10 +74,10 @@ vagrant up --provider virtualbox
 # or VMware (recommended on macOS: Fusion + vagrant-vmware-desktop)
 vagrant up --provider vmware_desktop
 
-# Linux host, with the master also bridged to the LAN on eno1
+# Linux host, with the control plane also bridged to the LAN on eno1
 BRIDGE_IFACE=eno1 vagrant up --provider virtualbox
 
-vagrant ssh master
+vagrant ssh control-plane
 kubectl get nodes -o wide
 ```
 
@@ -83,6 +85,18 @@ Tear down:
 ```
 vagrant destroy -f
 ```
+
+### Upgrading from a cluster with a `master` node
+Earlier versions of this directory named the control plane VM `master`. Vagrant tracks VMs by name, so **destroy an existing cluster before pulling this version**:
+```
+vagrant destroy -f      # run with the old version still checked out
+git pull
+vagrant up
+```
+If you've already pulled:
+1. Run `vagrant destroy -f`. This removes the workers, which kept their names.
+2. Vagrant no longer sees the old `master` VM, so delete it in VirtualBox or VMware.
+3. Run `rm -rf .vagrant/machines/master` in this directory, then `vagrant up`.
 
 ## Configuration
 ---
@@ -95,12 +109,14 @@ Set any of these as environment variables before running `vagrant up`, e.g. `WOR
 | `NODE_CPUS`       | `2`                   | vCPUs per VM. kubeadm needs at least 2 |
 | `K8S_BOX`         | `bento/ubuntu-24.04`  | Must have a build for your CPU and provider |
 | `K8S_BOX_VERSION` | latest                | Pin a box version |
-| `NETWORK_PREFIX`  | `10.0.0`              | Master is `.10`, workers `.11`, `.12`, … |
-| `BRIDGE_IFACE`    | unset                 | Adds a bridged NIC on the master. Linux: e.g. `eno1` (see `ip link`). macOS: e.g. `"en0: Wi-Fi"` (see `networksetup -listallhardwareports`) |
+| `NETWORK_PREFIX`  | `10.0.0`              | Control plane is `.10`, workers `.11`, `.12`, … |
+| `BRIDGE_IFACE`    | unset                 | Adds a bridged NIC on the control plane. Linux: e.g. `eno1` (see `ip link`). macOS: e.g. `"en0: Wi-Fi"` (see `networksetup -listallhardwareports`) |
 | `K8S_VERSION`     | `1.37`                | Kubernetes minor version from pkgs.k8s.io. The latest patch for that minor version is installed |
 | `CALICO_VERSION`  | `v3.33.0`             | Tested by Calico with Kubernetes 1.35–1.37. Check the [Calico requirements](https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements) if you change `K8S_VERSION` |
 | `POD_CIDR`        | `192.168.0.0/16`      | Must not overlap `NETWORK_PREFIX` or your LAN |
 | `INSTALL_DOCKER`  | `true`                | Install Docker on the nodes for development. Not needed for Kubernetes |
+| `INSTALL_ARGOCD`  | `false`               | Install [Argo CD](#argocd) after the last worker is up. Needs `WORKER_COUNT` of at least 1 |
+| `INSTALL_KARGO`   | `false`               | Install [Kargo](#kargo) (and Argo CD, if needed) after the last worker is up. Needs `WORKER_COUNT` of at least 1 |
 
 Use the same variables for every `vagrant` command in a session (e.g. `export WORKER_COUNT=1`). Otherwise Vagrant may not see machines you created earlier.
 
@@ -111,11 +127,11 @@ Use the same variables for every `vagrant` command in a session (e.g. `export WO
 - **"Specified host network could not be found" with `BRIDGE_IFACE`.** The interface name must match the host's exactly.
 - **A worker added more than 24 hours after the cluster was created can't join.** The kubeadm token has expired. Generate a new join command:
   ```
-  vagrant ssh master -c "sudo kubeadm token create --print-join-command | sudo tee /vagrant/join.sh"
+  vagrant ssh control-plane -c "sudo kubeadm token create --print-join-command | sudo tee /vagrant/join.sh"
   vagrant provision worker3
   ```
-- **Nodes stay `NotReady`.** Check Calico with `kubectl get pods -n calico-system` on the master.
-- **Calico's Whisker UI** (flow logs) is installed by default. To open it, run `kubectl port-forward -n calico-system service/whisker 8081:8081 --address 0.0.0.0` on the master, then browse to http://10.0.0.10:8081.
+- **Nodes stay `NotReady`.** Check Calico with `kubectl get pods -n calico-system` on the control plane.
+- **Calico's Whisker UI** (flow logs) is installed by default. To open it, run `kubectl port-forward -n calico-system service/whisker 8081:8081 --address 0.0.0.0` on the control plane, then browse to http://10.0.0.10:8081.
 
 ## Monitoring
 ---
@@ -125,9 +141,9 @@ Metrics Server and Prometheus setup is in [`monitoring/README.md`](monitoring/RE
 ---
 Basic documentation for k8sgpt is located [here](https://docs.k8sgpt.ai/getting-started/installation/).
 
-Log into the Kubernetes master:
+Log into the control plane:
 ```
-vagrant ssh master
+vagrant ssh control-plane
 ```
 
 Download and install the package for the VM's architecture. Check the [releases page](https://github.com/k8sgpt-ai/k8sgpt/releases) for the latest version. The same commands work for upgrades:
@@ -170,7 +186,7 @@ sudo systemctl restart ollama
 launchctl setenv OLLAMA_HOST "0.0.0.0"
 ```
 
-Test it from the master:
+Test it from the control plane:
 ```
 curl http://<OLLAMA_HOST_IP>:11434
 Ollama is running
@@ -183,7 +199,7 @@ curl http://<OLLAMA_HOST_IP>:11434/api/generate -d '{
 ```
 
 ### Configuring k8sgpt to use Ollama
-On the master, add the Ollama backend and make it the default:
+On the control plane, add the Ollama backend and make it the default:
 ```
 k8sgpt auth add --backend ollama --model llama3 --baseurl http://<OLLAMA_HOST_IP>:11434
 k8sgpt auth default --provider ollama
@@ -232,9 +248,35 @@ sudo apt-get install -y kubescape
 ## ArgoCD
 ---
 Installation directions are located [here](https://argo-cd.readthedocs.io/en/stable/getting_started/).
+
+### Install with the script
+[`addons/install-argocd.sh`](addons/install-argocd.sh) installs a pinned Argo CD version, exposes it on fixed NodePorts, waits until it's ready and prints the URL. It needs at least one worker and is safe to re-run.
+```
+vagrant ssh control-plane -c /vagrant/addons/install-argocd.sh
+```
+Or install it automatically when the cluster comes up:
+```
+INSTALL_ARGOCD=true vagrant up
+```
+
+Then browse to https://10.0.0.10:30443/ and log in as `admin`. To get the password, run this on the control plane:
+```
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+```
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ARGOCD_VERSION` | `v3.6.1` | Argo CD 3.6 is tested with Kubernetes 1.34–1.37 |
+| `ARGOCD_HTTPS_NODEPORT` | `30443` | HTTPS port for the UI and API |
+| `ARGOCD_HTTP_NODEPORT` | `30080` | HTTP port (redirects to HTTPS) |
+
+To change one, pass it on the command line, e.g. `vagrant ssh control-plane -c "ARGOCD_HTTPS_NODEPORT=30444 /vagrant/addons/install-argocd.sh"`.
+
+### Manual install
+Argo CD 3.x must be applied with `--server-side --force-conflicts`, because some of its CRDs are too large for a regular `kubectl apply`:
 ```
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
 ```
 
 Allow external access with a NodePort:
@@ -255,27 +297,54 @@ Get the initial `admin` password:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-Browse to `https://10.0.0.10:<port>/` from the host. If you set `BRIDGE_IFACE`, you can also use the master's LAN address (find it with `ip addr show` on the master).
+Browse to `https://10.0.0.10:<port>/` from the host. If you set `BRIDGE_IFACE`, you can also use the control plane's LAN address (find it with `ip addr show` on the control plane).
 
 ## Kargo
 ---
-[Kargo](https://kargo.io) promotes changes through stages (e.g. dev → staging → prod) and works with Argo CD, so install [ArgoCD](#argocd) first. Installation directions are located [here](https://docs.kargo.io/operator-guide/basic-installation).
+[Kargo](https://kargo.io) promotes changes through stages (e.g. dev → staging → prod) and works with Argo CD, so install [ArgoCD](#argocd) first (the script below does this for you). Installation directions are located [here](https://docs.kargo.io/operator-guide/basic-installation).
 
 > **Lab use only.** Kargo's docs say the default configuration is "suitable _only_ for trying Kargo in a local cluster that is not internet-facing." It uses the built-in admin account and a self-signed certificate. Before using Kargo anywhere else, follow the [secure configuration guide](https://docs.kargo.io/operator-guide/security/secure-configuration).
 
-Run these steps on the master (`vagrant ssh master`). The versions below were current when this was written; check the [Kargo releases](https://github.com/akuity/kargo/releases) and [cert-manager releases](https://github.com/cert-manager/cert-manager/releases) for newer ones.
+### Install with the script
+[`addons/install-kargo.sh`](addons/install-kargo.sh) installs everything Kargo needs (Argo CD if it's missing, Helm, cert-manager and the Kargo CLI), then Kargo itself on NodePort `31444`. Downloads are pinned and checksum-verified. It needs at least one worker and is safe to re-run.
+```
+vagrant ssh control-plane -c /vagrant/addons/install-kargo.sh
+```
+Or install it automatically when the cluster comes up:
+```
+INSTALL_KARGO=true vagrant up
+```
 
-### 1. Install Helm
+**The admin password** is generated on the first run and saved to `~/.kargo-admin-password` on the control plane, readable only by the `vagrant` user. It is never written under `/vagrant`, which is this repository on your host. Re-running the script keeps the same password. The password hash and token signing key are stored in the `kargo-admin-account` Secret instead of being passed on the Helm command line.
+
+Then browse to https://10.0.0.10:31444/ and log in with the admin password, or use the CLI on the control plane:
+```
+kargo login https://10.0.0.10:31444 --admin --password "$(cat ~/.kargo-admin-password)" --insecure-skip-tls-verify
+```
+
+| Variable | Default | Notes |
+|---|---|---|
+| `KARGO_VERSION` | `v1.12.5` | Kargo chart and CLI version |
+| `CERT_MANAGER_VERSION` | `v1.20.5` | |
+| `HELM_VERSION` | `v3.22.1` | Kargo's docs are tested with Helm 3 |
+| `KARGO_NODEPORT` | `31444` | HTTPS port for the UI and API |
+
+Changing `HELM_VERSION` or `KARGO_VERSION` also means updating the SHA-256 checksums near the top of the script. The **Version checks** workflow reports the correct values.
+
+### Manual install
+Run these steps on the control plane (`vagrant ssh control-plane`). The versions below were current when this was written; check the [Kargo releases](https://github.com/akuity/kargo/releases) and [cert-manager releases](https://github.com/cert-manager/cert-manager/releases) for newer ones.
+
+#### 1. Install Helm
 If Helm isn't installed yet, see [`monitoring/README.md`](monitoring/README.md#helm).
 
-### 2. Install cert-manager
+#### 2. Install cert-manager
 The default Kargo install uses cert-manager to create its TLS certificates.
 ```
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.5/cert-manager.yaml
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n cert-manager
 ```
 
-### 3. Install the Kargo CLI
+#### 3. Install the Kargo CLI
 The CLI is needed to hash the admin password. This picks the right binary for the VM's architecture (`amd64` or `arm64`):
 ```
 KARGO_VERSION=v1.12.5
@@ -285,7 +354,7 @@ rm kargo
 kargo version --client
 ```
 
-### 4. Generate the admin password and token signing key
+#### 4. Generate the admin password and token signing key
 Kargo has no default values for these, so you must create them:
 ```
 pass=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
@@ -294,7 +363,7 @@ hashed_pass=$(kargo hash-password --password "$pass")
 signing_key=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
 ```
 
-### 5. Install Kargo
+#### 5. Install Kargo
 This exposes the Kargo API and UI on NodePort `31444`, like the NodePort used for ArgoCD above:
 ```
 helm install kargo \
@@ -317,7 +386,7 @@ kubectl get svc kargo-api -n kargo
 
 If `helm install` fails with a 403 error, log out of ghcr.io (`docker logout ghcr.io`) and try again. The chart is public.
 
-### 6. Log in
+#### 6. Log in
 **UI:** browse to `https://10.0.0.10:31444/` from the host and log in as admin with the password from step 4. The certificate is self-signed, so your browser will show a warning.
 
 **CLI:**
@@ -342,10 +411,10 @@ Next, the [Kargo quickstart](https://docs.kargo.io/quickstart) walks through cre
 ---
 The cluster can reach GitHub, but GitHub can't reach the cluster:
 - **Outbound works.** The VMs use Vagrant's NAT adapter, and Calico NATs pod traffic (`natOutgoing: Enabled`), so ArgoCD and Kargo can clone, poll and push to GitHub over HTTPS or SSH.
-- **Inbound doesn't.** The master's address (`10.0.0.10`, or its LAN address with `BRIDGE_IFACE`) isn't reachable from the internet, so **GitHub webhooks won't arrive**. ArgoCD and Kargo poll for changes instead (ArgoCD about every 3 minutes by default), so updates appear within a few minutes rather than instantly. Exposing the cluster to the internet to receive webhooks is a security decision; don't do it with the lab configuration above.
+- **Inbound doesn't.** The control plane's address (`10.0.0.10`, or its LAN address with `BRIDGE_IFACE`) isn't reachable from the internet, so **GitHub webhooks won't arrive**. ArgoCD and Kargo poll for changes instead (ArgoCD about every 3 minutes by default), so updates appear within a few minutes rather than instantly. Exposing the cluster to the internet to receive webhooks is a security decision; don't do it with the lab configuration above.
 
 ### Check connectivity
-From the master, check the node and then a pod. Both should return `HTTP/2 200`:
+From the control plane, check the node and then a pod. Both should return `HTTP/2 200`:
 ```
 curl -sI https://github.com | head -n1
 kubectl run nettest --rm -it --restart=Never --image=curlimages/curl -- curl -sI https://github.com
