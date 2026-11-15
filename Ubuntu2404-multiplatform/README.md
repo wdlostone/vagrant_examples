@@ -17,6 +17,7 @@ The provisioning scripts are in [`scripts/`](scripts): `common.sh` runs on every
 - `kubeadm`, `kubelet` and `kubectl` from pkgs.k8s.io (held at the installed version)
 - [Calico](https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises) as the CNI, pinned to the private network so it doesn't use the hypervisor's NAT interface
 - Docker for development (optional, see `INSTALL_DOCKER`). See the [Docker install docs](https://docs.docker.com/engine/install/ubuntu/) and [post-install docs](https://docs.docker.com/engine/install/linux-postinstall/)
+- Optional add-ons: [Argo CD](#argocd) and [Kargo](#kargo), with install scripts in [`addons/`](addons) (see `INSTALL_ARGOCD` and `INSTALL_KARGO`)
 
 ### Changes from the old `Ubuntu2404` Vagrantfile
 - **Architecture-aware.** Detects `arm64`/`amd64` instead of hardcoding amd64.
@@ -114,6 +115,8 @@ Set any of these as environment variables before running `vagrant up`, e.g. `WOR
 | `CALICO_VERSION`  | `v3.33.0`             | Tested by Calico with Kubernetes 1.35–1.37. Check the [Calico requirements](https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements) if you change `K8S_VERSION` |
 | `POD_CIDR`        | `192.168.0.0/16`      | Must not overlap `NETWORK_PREFIX` or your LAN |
 | `INSTALL_DOCKER`  | `true`                | Install Docker on the nodes for development. Not needed for Kubernetes |
+| `INSTALL_ARGOCD`  | `false`               | Install [Argo CD](#argocd) after the last worker is up. Needs `WORKER_COUNT` of at least 1 |
+| `INSTALL_KARGO`   | `false`               | Install [Kargo](#kargo) (and Argo CD, if needed) after the last worker is up. Needs `WORKER_COUNT` of at least 1 |
 
 Use the same variables for every `vagrant` command in a session (e.g. `export WORKER_COUNT=1`). Otherwise Vagrant may not see machines you created earlier.
 
@@ -245,9 +248,35 @@ sudo apt-get install -y kubescape
 ## ArgoCD
 ---
 Installation directions are located [here](https://argo-cd.readthedocs.io/en/stable/getting_started/).
+
+### Install with the script
+[`addons/install-argocd.sh`](addons/install-argocd.sh) installs a pinned Argo CD version, exposes it on fixed NodePorts, waits until it's ready and prints the URL. It needs at least one worker and is safe to re-run.
+```
+vagrant ssh control-plane -c /vagrant/addons/install-argocd.sh
+```
+Or install it automatically when the cluster comes up:
+```
+INSTALL_ARGOCD=true vagrant up
+```
+
+Then browse to https://10.0.0.10:30443/ and log in as `admin`. To get the password, run this on the control plane:
+```
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+```
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ARGOCD_VERSION` | `v3.6.1` | Argo CD 3.6 is tested with Kubernetes 1.34–1.37 |
+| `ARGOCD_HTTPS_NODEPORT` | `30443` | HTTPS port for the UI and API |
+| `ARGOCD_HTTP_NODEPORT` | `30080` | HTTP port (redirects to HTTPS) |
+
+To change one, pass it on the command line, e.g. `vagrant ssh control-plane -c "ARGOCD_HTTPS_NODEPORT=30444 /vagrant/addons/install-argocd.sh"`.
+
+### Manual install
+Argo CD 3.x must be applied with `--server-side --force-conflicts`, because some of its CRDs are too large for a regular `kubectl apply`:
 ```
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
 ```
 
 Allow external access with a NodePort:
@@ -272,23 +301,50 @@ Browse to `https://10.0.0.10:<port>/` from the host. If you set `BRIDGE_IFACE`, 
 
 ## Kargo
 ---
-[Kargo](https://kargo.io) promotes changes through stages (e.g. dev → staging → prod) and works with Argo CD, so install [ArgoCD](#argocd) first. Installation directions are located [here](https://docs.kargo.io/operator-guide/basic-installation).
+[Kargo](https://kargo.io) promotes changes through stages (e.g. dev → staging → prod) and works with Argo CD, so install [ArgoCD](#argocd) first (the script below does this for you). Installation directions are located [here](https://docs.kargo.io/operator-guide/basic-installation).
 
 > **Lab use only.** Kargo's docs say the default configuration is "suitable _only_ for trying Kargo in a local cluster that is not internet-facing." It uses the built-in admin account and a self-signed certificate. Before using Kargo anywhere else, follow the [secure configuration guide](https://docs.kargo.io/operator-guide/security/secure-configuration).
 
+### Install with the script
+[`addons/install-kargo.sh`](addons/install-kargo.sh) installs everything Kargo needs (Argo CD if it's missing, Helm, cert-manager and the Kargo CLI), then Kargo itself on NodePort `31444`. Downloads are pinned and checksum-verified. It needs at least one worker and is safe to re-run.
+```
+vagrant ssh control-plane -c /vagrant/addons/install-kargo.sh
+```
+Or install it automatically when the cluster comes up:
+```
+INSTALL_KARGO=true vagrant up
+```
+
+**The admin password** is generated on the first run and saved to `~/.kargo-admin-password` on the control plane, readable only by the `vagrant` user. It is never written under `/vagrant`, which is this repository on your host. Re-running the script keeps the same password. The password hash and token signing key are stored in the `kargo-admin-account` Secret instead of being passed on the Helm command line.
+
+Then browse to https://10.0.0.10:31444/ and log in with the admin password, or use the CLI on the control plane:
+```
+kargo login https://10.0.0.10:31444 --admin --password "$(cat ~/.kargo-admin-password)" --insecure-skip-tls-verify
+```
+
+| Variable | Default | Notes |
+|---|---|---|
+| `KARGO_VERSION` | `v1.12.5` | Kargo chart and CLI version |
+| `CERT_MANAGER_VERSION` | `v1.20.5` | |
+| `HELM_VERSION` | `v3.22.1` | Kargo's docs are tested with Helm 3 |
+| `KARGO_NODEPORT` | `31444` | HTTPS port for the UI and API |
+
+Changing `HELM_VERSION` or `KARGO_VERSION` also means updating the SHA-256 checksums near the top of the script. The **Version checks** workflow reports the correct values.
+
+### Manual install
 Run these steps on the control plane (`vagrant ssh control-plane`). The versions below were current when this was written; check the [Kargo releases](https://github.com/akuity/kargo/releases) and [cert-manager releases](https://github.com/cert-manager/cert-manager/releases) for newer ones.
 
-### 1. Install Helm
+#### 1. Install Helm
 If Helm isn't installed yet, see [`monitoring/README.md`](monitoring/README.md#helm).
 
-### 2. Install cert-manager
+#### 2. Install cert-manager
 The default Kargo install uses cert-manager to create its TLS certificates.
 ```
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.5/cert-manager.yaml
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n cert-manager
 ```
 
-### 3. Install the Kargo CLI
+#### 3. Install the Kargo CLI
 The CLI is needed to hash the admin password. This picks the right binary for the VM's architecture (`amd64` or `arm64`):
 ```
 KARGO_VERSION=v1.12.5
@@ -298,7 +354,7 @@ rm kargo
 kargo version --client
 ```
 
-### 4. Generate the admin password and token signing key
+#### 4. Generate the admin password and token signing key
 Kargo has no default values for these, so you must create them:
 ```
 pass=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
@@ -307,7 +363,7 @@ hashed_pass=$(kargo hash-password --password "$pass")
 signing_key=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
 ```
 
-### 5. Install Kargo
+#### 5. Install Kargo
 This exposes the Kargo API and UI on NodePort `31444`, like the NodePort used for ArgoCD above:
 ```
 helm install kargo \
@@ -330,7 +386,7 @@ kubectl get svc kargo-api -n kargo
 
 If `helm install` fails with a 403 error, log out of ghcr.io (`docker logout ghcr.io`) and try again. The chart is public.
 
-### 6. Log in
+#### 6. Log in
 **UI:** browse to `https://10.0.0.10:31444/` from the host and log in as admin with the password from step 4. The certificate is self-signed, so your browser will show a warning.
 
 **CLI:**

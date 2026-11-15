@@ -84,14 +84,14 @@ jobs:
 
       - name: bash -n
         run: |
-          for f in */scripts/*.sh .github/scripts/*.sh; do
+          for f in */scripts/*.sh */addons/*.sh .github/scripts/*.sh; do
             bash -n "$f" && echo "ok  $f"
           done
 
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck --severity=warning -- */scripts/*.sh .github/scripts/*.sh
+          shellcheck --severity=warning -- */scripts/*.sh */addons/*.sh .github/scripts/*.sh
 
       - name: actionlint
         # actionlint also runs shellcheck on every `run:` block

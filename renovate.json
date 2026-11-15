@@ -31,9 +31,27 @@
       "matchStrings": ["K8SGPT_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
       "depNameTemplate": "k8sgpt-ai/k8sgpt",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Versions in the add-on scripts, marked with a `# renovate:` comment",
+      "managerFilePatterns": ["/(^|/)addons/[^/]+\\.sh$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n[A-Z_]+=\"\\$\\{[A-Z_]+:-(?<currentValue>[^}]+)\\}\""
+      ]
     }
   ],
   "packageRules": [
+    {
+      "description": "Kargo's install docs are tested with Helm 3; stay on Helm 3",
+      "matchDepNames": ["helm/helm"],
+      "allowedVersions": "<4"
+    },
+    {
+      "description": "Review add-on updates together. Helm and Kargo CLI updates also need new checksums in install-kargo.sh (the Version checks workflow reports the right values)",
+      "matchFileNames": ["**/addons/**"],
+      "groupName": "Cluster add-ons"
+    },
     {
       "description": "Review Kubernetes, Calico and metrics-server updates together; they have compatibility requirements",
       "matchDepNames": [

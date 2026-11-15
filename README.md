@@ -16,7 +16,7 @@ GitHub Actions runs these on every pull request:
 
 - **Lint** (`.github/workflows/lint.yml`)
   - Vagrantfile syntax (`ruby -c`) and that every provisioning script it references exists
-  - `bash -n` and `shellcheck` on all provisioning scripts
+  - `bash -n` and `shellcheck` on all provisioning and add-on scripts
   - `actionlint` on the workflows
   - `kubeconform` on the manifests in each `monitoring/` folder, using that directory's Kubernetes version
   - `markdownlint` and a link check (`lychee`) on the README files. Configured in `.markdownlint-cli2.jsonc` and `.github/lychee.toml`
@@ -24,13 +24,14 @@ GitHub Actions runs these on every pull request:
   - The Kubernetes apt repo for `K8S_VERSION` exists and that version is not end of life
   - The Calico manifests for `CALICO_VERSION` exist
   - Every container image in the `monitoring/` manifests exists
+  - The add-on versions (Argo CD, Kargo, cert-manager, Helm) exist, Argo CD is tested with `K8S_VERSION`, and the pinned download checksums are correct
   - `renovate.json` is valid
 
 To run the main checks locally:
 ```
 brew install shellcheck actionlint kubeconform   # or your package manager
 for f in */Vagrantfile; do ruby -c "$f"; done
-shellcheck --severity=warning */scripts/*.sh .github/scripts/*.sh
+shellcheck --severity=warning */scripts/*.sh */addons/*.sh .github/scripts/*.sh
 actionlint
 .github/scripts/kubeconform.sh
 ```
@@ -40,6 +41,7 @@ actionlint
 [Renovate](https://docs.renovatebot.com/) (`renovate.json`) opens pull requests when new versions are released for:
 - Kubernetes (`K8S_VERSION`), Calico (`CALICO_VERSION`) and metrics-server, grouped into one pull request because they depend on each other
 - k8sgpt in the README install instructions
+- Argo CD, Kargo, cert-manager and Helm in the add-on scripts (`Ubuntu2404-multiplatform/addons/`), grouped into one pull request. Helm and Kargo updates also need new checksums in `install-kargo.sh`; the **Version checks** workflow reports the right values
 - The GitHub Actions used by the workflows
 
 Only `Ubuntu2404-multiplatform` is updated. The older directories are left as they are.
