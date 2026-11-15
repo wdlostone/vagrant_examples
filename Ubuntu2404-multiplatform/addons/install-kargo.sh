@@ -22,9 +22,14 @@ KARGO_NODEPORT="${KARGO_NODEPORT:-31444}"
 
 # SHA-256 of each download. Update these whenever the versions above change
 # (the "Version checks" workflow fails until they match).
+# The variables below are read indirectly by checksum_for(), which shellcheck can't follow
+# shellcheck disable=SC2034
 HELM_SHA256_amd64=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+# shellcheck disable=SC2034
 HELM_SHA256_arm64=4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d
+# shellcheck disable=SC2034
 KARGO_CLI_SHA256_amd64=18b2e313b646a3d2f54bef1f1dca14e209d8199d3fc5b94ce125d76df49b3b67
+# shellcheck disable=SC2034
 KARGO_CLI_SHA256_arm64=8efa60de964e95e56484c96ab7b848def9735b0281b63a715bccc125ae5e9122
 
 ADMIN_SECRET=kargo-admin-account            # holds the password hash and token signing key
