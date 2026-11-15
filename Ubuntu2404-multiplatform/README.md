@@ -355,6 +355,7 @@ If the pod test fails:
 - **It hangs:** check Calico with `kubectl get pods -n calico-system`
 
 ### Credentials
+
 | Repo | ArgoCD (reads) | Kargo (reads and writes) |
 |---|---|---|
 | Public | No credentials needed | Needs credentials to push promotion commits |
