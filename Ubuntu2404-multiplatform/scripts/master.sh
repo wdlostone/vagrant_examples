@@ -76,7 +76,7 @@ EOF
 fi
 
 # Write the join command last, so workers only see it once the master is ready
-sudo kubeadm token create --print-join-command > "${JOIN_FILE}.tmp"
+sudo kubeadm token create --print-join-command | tee "${JOIN_FILE}.tmp" > /dev/null
 chmod +x "${JOIN_FILE}.tmp"
 mv "${JOIN_FILE}.tmp" "${JOIN_FILE}"
 echo "Join command written to ${JOIN_FILE}"
