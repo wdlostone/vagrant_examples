@@ -256,3 +256,141 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 ```
 
 Browse to `https://10.0.0.10:<port>/` from the host. If you set `BRIDGE_IFACE`, you can also use the master's LAN address (find it with `ip addr show` on the master).
+
+## Kargo
+---
+[Kargo](https://kargo.io) promotes changes through stages (e.g. dev → staging → prod) and works with Argo CD, so install [ArgoCD](#argocd) first. Installation directions are located [here](https://docs.kargo.io/operator-guide/basic-installation).
+
+> **Lab use only.** Kargo's docs say the default configuration is "suitable _only_ for trying Kargo in a local cluster that is not internet-facing." It uses the built-in admin account and a self-signed certificate. Before using Kargo anywhere else, follow the [secure configuration guide](https://docs.kargo.io/operator-guide/security/secure-configuration).
+
+Run these steps on the master (`vagrant ssh master`). The versions below were current when this was written; check the [Kargo releases](https://github.com/akuity/kargo/releases) and [cert-manager releases](https://github.com/cert-manager/cert-manager/releases) for newer ones.
+
+### 1. Install Helm
+If Helm isn't installed yet, see [`monitoring/README.md`](monitoring/README.md#helm).
+
+### 2. Install cert-manager
+The default Kargo install uses cert-manager to create its TLS certificates.
+```
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.20.5/cert-manager.yaml
+kubectl wait --for=condition=Available --timeout=300s deployment --all -n cert-manager
+```
+
+### 3. Install the Kargo CLI
+The CLI is needed to hash the admin password. This picks the right binary for the VM's architecture (`amd64` or `arm64`):
+```
+KARGO_VERSION=v1.12.5
+curl -fsSL -o kargo "https://github.com/akuity/kargo/releases/download/${KARGO_VERSION}/kargo-linux-$(dpkg --print-architecture)"
+sudo install -m 0755 kargo /usr/local/bin/kargo
+rm kargo
+kargo version --client
+```
+
+### 4. Generate the admin password and token signing key
+Kargo has no default values for these, so you must create them:
+```
+pass=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
+echo "Kargo admin password: $pass"    # save this; you need it to log in
+hashed_pass=$(kargo hash-password --password "$pass")
+signing_key=$(openssl rand -base64 48 | tr -d "=+/" | head -c 32)
+```
+
+### 5. Install Kargo
+This exposes the Kargo API and UI on NodePort `31444`, like the NodePort used for ArgoCD above:
+```
+helm install kargo \
+  oci://ghcr.io/akuity/kargo-charts/kargo \
+  --version 1.12.5 \
+  --namespace kargo \
+  --create-namespace \
+  --set api.adminAccount.passwordHash="$hashed_pass" \
+  --set api.adminAccount.tokenSigningKey="$signing_key" \
+  --set api.service.type=NodePort \
+  --set api.service.nodePort=31444 \
+  --wait
+```
+
+Check that it's running:
+```
+kubectl get pods -n kargo
+kubectl get svc kargo-api -n kargo
+```
+
+If `helm install` fails with a 403 error, log out of ghcr.io (`docker logout ghcr.io`) and try again. The chart is public.
+
+### 6. Log in
+**UI:** browse to `https://10.0.0.10:31444/` from the host and log in as admin with the password from step 4. The certificate is self-signed, so your browser will show a warning.
+
+**CLI:**
+```
+kargo login https://10.0.0.10:31444 --admin --password "$pass" --insecure-skip-tls-verify
+```
+
+Instead of a NodePort, you can leave the service as `ClusterIP` (drop the two `api.service` lines) and port-forward:
+```
+kubectl port-forward svc/kargo-api -n kargo 31444:443 --address 0.0.0.0
+```
+
+To uninstall:
+```
+helm uninstall kargo -n kargo
+kubectl delete namespace kargo
+```
+
+Next, the [Kargo quickstart](https://docs.kargo.io/quickstart) walks through creating a project, warehouse and stages.
+
+## Connecting ArgoCD and Kargo to GitHub
+---
+The cluster can reach GitHub, but GitHub can't reach the cluster:
+- **Outbound works.** The VMs use Vagrant's NAT adapter, and Calico NATs pod traffic (`natOutgoing: Enabled`), so ArgoCD and Kargo can clone, poll and push to GitHub over HTTPS or SSH.
+- **Inbound doesn't.** The master's address (`10.0.0.10`, or its LAN address with `BRIDGE_IFACE`) isn't reachable from the internet, so **GitHub webhooks won't arrive**. ArgoCD and Kargo poll for changes instead (ArgoCD about every 3 minutes by default), so updates appear within a few minutes rather than instantly. Exposing the cluster to the internet to receive webhooks is a security decision; don't do it with the lab configuration above.
+
+### Check connectivity
+From the master, check the node and then a pod. Both should return `HTTP/2 200`:
+```
+curl -sI https://github.com | head -n1
+kubectl run nettest --rm -it --restart=Never --image=curlimages/curl -- curl -sI https://github.com
+```
+If the pod test fails:
+- **`Could not resolve host`:** check CoreDNS with `kubectl get pods -n kube-system -l k8s-app=kube-dns`
+- **It hangs:** check Calico with `kubectl get pods -n calico-system`
+
+### Credentials
+| Repo | ArgoCD (reads) | Kargo (reads and writes) |
+|---|---|---|
+| Public | No credentials needed | Needs credentials to push promotion commits |
+| Private | Read-only credentials | Read and write credentials |
+
+Guidelines:
+- Use a [fine-grained personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) or a deploy key limited to the one repository, with only the access each tool needs:
+  - **ArgoCD:** Contents **read-only**
+  - **Kargo:** Contents **read and write**, plus Pull requests **read and write** if your promotions open pull requests
+- Give tokens an expiry date and rotate them.
+- **Never commit tokens or keys** to this repository, the Vagrantfile or the provisioning scripts. Create them in the cluster directly, as below.
+- Your organization may have its own rules for machine credentials on GitHub. Check with whoever manages your GitHub organization first.
+
+The examples below read the token without echoing it, so it doesn't appear on screen or in your shell history. Replace `<owner>/<repo>` with your repository.
+
+**ArgoCD** (in the `argocd` namespace):
+```
+read -rsp "GitHub token for ArgoCD (read-only): " GITHUB_TOKEN; echo
+kubectl -n argocd create secret generic github-repo \
+  --from-literal=type=git \
+  --from-literal=url=https://github.com/<owner>/<repo>.git \
+  --from-literal=username=git \
+  --from-literal=password="$GITHUB_TOKEN"
+kubectl -n argocd label secret github-repo argocd.argoproj.io/secret-type=repository
+unset GITHUB_TOKEN
+```
+See the [ArgoCD private repositories docs](https://argo-cd.readthedocs.io/en/stable/user-guide/private-repositories/) for SSH keys and GitHub Apps.
+
+**Kargo** (in your Kargo project's namespace, which is the project name):
+```
+read -rsp "GitHub token for Kargo (read/write): " GITHUB_TOKEN; echo
+kubectl -n <kargo-project> create secret generic github-repo \
+  --from-literal=repoURL=https://github.com/<owner>/<repo>.git \
+  --from-literal=username=git \
+  --from-literal=password="$GITHUB_TOKEN"
+kubectl -n <kargo-project> label secret github-repo kargo.akuity.io/cred-type=git
+unset GITHUB_TOKEN
+```
+See the [Kargo managing secrets docs](https://docs.kargo.io/user-guide/security/managing-secrets) for credentials shared across projects and other options.
