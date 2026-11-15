@@ -1,0 +1,47 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "ignorePaths": ["Ubuntu2204/**", "Ubuntu2404/**"],
+  "kubernetes": {
+    "managerFilePatterns": ["/(^|/)monitoring/[^/]+\\.ya?ml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Kubernetes minor version installed from pkgs.k8s.io",
+      "managerFilePatterns": ["/(^|/)Vagrantfile$/"],
+      "matchStrings": ["ENV\\.fetch\\(\"K8S_VERSION\", \"(?<currentValue>\\d+\\.\\d+)\"\\)"],
+      "depNameTemplate": "kubernetes/kubernetes",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+)\\.0$",
+      "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "Calico version",
+      "managerFilePatterns": ["/(^|/)Vagrantfile$/"],
+      "matchStrings": ["ENV\\.fetch\\(\"CALICO_VERSION\", \"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"\\)"],
+      "depNameTemplate": "projectcalico/calico",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "k8sgpt version in the README install instructions",
+      "managerFilePatterns": ["/(^|/)README\\.md$/"],
+      "matchStrings": ["K8SGPT_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "k8sgpt-ai/k8sgpt",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Review Kubernetes, Calico and metrics-server updates together; they have compatibility requirements",
+      "matchDepNames": [
+        "kubernetes/kubernetes",
+        "projectcalico/calico",
+        "registry.k8s.io/metrics-server/metrics-server"
+      ],
+      "groupName": "Kubernetes cluster components"
+    }
+  ]
+}

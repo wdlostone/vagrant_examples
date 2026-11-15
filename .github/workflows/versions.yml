@@ -1,0 +1,48 @@
+name: Version checks
+
+on:
+  pull_request:
+    paths:
+      - "**/Vagrantfile"
+      - "**/scripts/**"
+      - "**/monitoring/**"
+      - "renovate.json"
+      - ".github/scripts/check-versions.sh"
+      - ".github/workflows/versions.yml"
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upstream-versions:
+    name: Pinned versions exist and are supported
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Kubernetes, Calico and image versions
+        run: .github/scripts/check-versions.sh
+
+  renovate-config:
+    name: Renovate config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RENOVATE_VERSION: 44.239.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate renovate.json
+        run: npx --yes --package "renovate@${RENOVATE_VERSION}" -- renovate-config-validator --strict renovate.json
